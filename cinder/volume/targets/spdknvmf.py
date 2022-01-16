@@ -114,6 +114,14 @@ class SpdkNvmf(nvmeof.NVMeOF):
                     if spdk_name in namespace['bdev_name']:
                         return subsystem['nqn']
 
+    def _get_namespaces_with_subsystem_nqn(self, nqn):
+        output = self._rpc_call('nvmf_get_subsystems')
+
+        if nqn is not None:
+            for subsystem in output[1:]:
+                if nqn in subsystem['nqn']:
+                    return subsystem['namespaces']
+
     def _get_first_free_node(self):
         cnode_num = []
 
@@ -192,6 +200,13 @@ class SpdkNvmf(nvmeof.NVMeOF):
         nqn = self._get_nqn_with_volume_name(target_name.name)
 
         if nqn is not None:
+            all_ns = self._get_namespaces_with_subsystem_nqn(nqn)
+            for ns in all_ns:
+                try:
+                    params = {'nqn': nqn, 'nsid': ns['nsid']}
+                    self._rpc_call('nvmf_subsystem_remove_ns', params)
+                except Exception as e:
+                    LOG.debug('SPDK ERROR: subsystem ns not deleted: %s', e)
             try:
                 params = {'nqn': nqn}
                 self._rpc_call('nvmf_delete_subsystem', params)
