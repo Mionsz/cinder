@@ -294,8 +294,9 @@ class VolumeManager(manager.CleanableManager,
             curr_active_backend_id = service.active_backend_id
             self.service_uuid = service.uuid
 
-        if self.configuration.suppress_requests_ssl_warnings:
-            LOG.warning("Suppressing requests library SSL Warnings")
+        if self.configuration.suppress_requests_ssl_warnings \
+           and "packages" in dir(requests):
+            LOG.warning("Suppressing requests library SSL Warnings. Success")
             requests.packages.urllib3.disable_warnings(
                 requests.packages.urllib3.exceptions.InsecureRequestWarning)
             requests.packages.urllib3.disable_warnings(
