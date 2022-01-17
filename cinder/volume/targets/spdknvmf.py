@@ -114,14 +114,6 @@ class SpdkNvmf(nvmeof.NVMeOF):
                     if spdk_name in namespace['bdev_name']:
                         return subsystem['nqn']
 
-    def _get_namespaces_with_subsystem_nqn(self, nqn):
-        output = self._rpc_call('nvmf_get_subsystems')
-
-        if nqn is not None:
-            for subsystem in output[1:]:
-                if nqn in subsystem['nqn']:
-                    return subsystem['namespaces']
-
     def _get_first_free_node(self):
         cnode_num = []
 
@@ -135,6 +127,52 @@ class SpdkNvmf(nvmeof.NVMeOF):
         test_set = set(range(1, len(cnode_num) + 2))
 
         return list(test_set.difference(cnode_num))[0]
+
+    def _get_subsystem_ns_dict_by_nqn(self, nqn):
+        if nqn is not None:
+            try:
+                output = self._rpc_call('nvmf_get_subsystems')
+                for subsystem in output[1:]:
+                    if nqn in subsystem['nqn']:
+                        return subsystem['namespaces']
+            except Exception as e:
+                LOG.debug('SPDK ERROR: No ns in subsystem found: %s', e)
+
+    def _delete_all_ns_from_subsystem(self, subsystem_nqn):
+        LOG.debug('SPDK removing all ns from subsystem: %s', subsystem_nqn)
+        ns_list = self._get_subsystem_ns_dict_by_nqn(subsystem_nqn)
+        for ns in ns_list:
+            try:
+                params = {'nqn': subsystem_nqn, 'nsid': ns['nsid']}
+                self._rpc_call('nvmf_subsystem_remove_ns', params)
+            except Exception as e:
+                LOG.debug('SPDK ERROR: subsystem ns not deleted: %s', e)
+
+    def _get_bdev_ctrl_dict_by_nqn(self, target_nqn):
+        LOG.debug('SPDK get controller by nqn: %s', target_nqn)
+        try:
+            bdev_ctrl_list = self._rpc_call('bdev_nvme_get_controllers')
+            for bdev_ctrl in bdev_ctrl_list:
+                for ctrls in bdev_ctrl['ctrlrs']:
+                    if 'trid' in ctrls:
+                        if 'subnqn' in ctrls['trid']:
+                            if target_nqn in ctrls['trid']['subnqn']:
+                                bdev_ctrl_trid = ctrls['trid']
+                                bdev_ctrl_trid['name'] = bdev_ctrl['name']
+                                return bdev_ctrl_trid
+        except Exception as e:
+            LOG.debug('SPDK ERROR: Could not get bdev_ctrl: %s', e)
+
+    def _detach_nvmeof_controller(self, target_nqn):
+        LOG.debug('SPDK detaching controller by nqn: %s', target_nqn)
+        try:
+            bdev_ctrl_trid = self._get_bdev_ctrl_dict_by_nqn(target_nqn)
+            if bdev_ctrl_trid is not None:
+                self._rpc_call('bdev_nvme_detach_controller', bdev_ctrl_trid)
+            else:
+                LOG.debug('SPDK ERROR: No bdev controller: %s', target_nqn)
+        except Exception as e:
+            LOG.debug('SPDK ERROR: Could not detach controller: %s', e)
 
     def create_nvmeof_target(self,
                              volume_id,
@@ -196,17 +234,11 @@ class SpdkNvmf(nvmeof.NVMeOF):
 
     def delete_nvmeof_target(self, target_name):
         LOG.debug('SPDK delete target: %s', target_name)
-
         nqn = self._get_nqn_with_volume_name(target_name.name)
 
         if nqn is not None:
-            all_ns = self._get_namespaces_with_subsystem_nqn(nqn)
-            for ns in all_ns:
-                try:
-                    params = {'nqn': nqn, 'nsid': ns['nsid']}
-                    self._rpc_call('nvmf_subsystem_remove_ns', params)
-                except Exception as e:
-                    LOG.debug('SPDK ERROR: subsystem ns not deleted: %s', e)
+            self._detach_nvmeof_controller(nqn)
+            self._delete_all_ns_from_subsystem(nqn)
             try:
                 params = {'nqn': nqn}
                 self._rpc_call('nvmf_delete_subsystem', params)
